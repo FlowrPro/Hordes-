@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>.io prototype — client</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="hud">
+    <div id="info">WASD / Arrow keys to move — open console for debug</div>
+    <div id="status">WS: <span id="ws-status">disconnected</span></div>
+  </div>
+  <canvas id="game"></canvas>
+
+  <!-- runtime config: generate or edit this file before deploying -->
+  <script src="config.js"></script>
+  <script src="game.js"></script>
+</body>
+</html>
