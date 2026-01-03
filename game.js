@@ -12,7 +12,7 @@ resize();
    NETWORK
    ========================= */
 
-const socket = new WebSocket("wss://YOUR_RENDER_URL");
+const socket = new WebSocket("wss://hordes-backend.onrender.com");
 
 let players = [];
 let myId = null;
