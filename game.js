@@ -1,239 +1,163 @@
-// Simple single-player movement + optional WebSocket connection
-// Reads backend WS URL from window.CONFIG.WS_URL (set via config.js).
-// If not present, falls back to ws://localhost:8080 for local testing.
-
-const WS_URL = (window.CONFIG && window.CONFIG.WS_URL) || 'ws://localhost:8080';
-console.log('Using WS_URL =', WS_URL);
-
-const canvas = document.getElementById('game');
-const ctx = canvas.getContext('2d');
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
 
 function resize() {
-  const DPR = window.devicePixelRatio || 1;
-  canvas.width = Math.floor(window.innerWidth * DPR);
-  canvas.height = Math.floor(window.innerHeight * DPR);
-  canvas.style.width = window.innerWidth + 'px';
-  canvas.style.height = window.innerHeight + 'px';
-  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
 }
-window.addEventListener('resize', resize);
+window.addEventListener("resize", resize);
 resize();
 
-// World/Player state
-const WORLD = { width: 3000, height: 2000 };
-const player = {
-  x: WORLD.width / 2,
-  y: WORLD.height / 2,
-  radius: 14,
-  color: '#4ee',
-  speed: 280, // units per second
-  vx: 0,
-  vy: 0
+/* =========================
+   NETWORK
+   ========================= */
+
+const socket = new WebSocket("wss://YOUR_RENDER_URL");
+
+let players = [];
+let myId = null;
+
+socket.onmessage = (e) => {
+  const msg = JSON.parse(e.data);
+  if (msg.type === "snapshot") {
+    players = msg.players;
+    if (myId === null && players.length > 0) {
+      myId = players[players.length - 1].id;
+    }
+  }
 };
 
-const otherPlayers = {}; // id => { x, y, name, radius, color }
-const input = { up: false, down: false, left: false, right: false };
+/* =========================
+   INPUT
+   ========================= */
 
-// Keyboard handlers
-window.addEventListener('keydown', (e) => {
-  if (e.key === 'w' || e.key === 'ArrowUp') input.up = true;
-  if (e.key === 's' || e.key === 'ArrowDown') input.down = true;
-  if (e.key === 'a' || e.key === 'ArrowLeft') input.left = true;
-  if (e.key === 'd' || e.key === 'ArrowRight') input.right = true;
-});
-window.addEventListener('keyup', (e) => {
-  if (e.key === 'w' || e.key === 'ArrowUp') input.up = false;
-  if (e.key === 's' || e.key === 'ArrowDown') input.down = false;
-  if (e.key === 'a' || e.key === 'ArrowLeft') input.left = false;
-  if (e.key === 'd' || e.key === 'ArrowRight') input.right = false;
-});
+const keys = {};
+window.addEventListener("keydown", e => keys[e.key.toLowerCase()] = true);
+window.addEventListener("keyup", e => keys[e.key.toLowerCase()] = false);
 
-// Basic camera that centers on player
-function worldToScreen(wx, wy) {
-  const cx = player.x;
-  const cy = player.y;
-  const sx = canvas.width / (window.devicePixelRatio || 1) / 2 + (wx - cx);
-  const sy = canvas.height / (window.devicePixelRatio || 1) / 2 + (wy - cy);
-  return { x: sx, y: sy };
+function sendInput() {
+  let vx = 0, vy = 0;
+  const speed = 4;
+
+  if (keys["w"]) vy -= speed;
+  if (keys["s"]) vy += speed;
+  if (keys["a"]) vx -= speed;
+  if (keys["d"]) vx += speed;
+
+  socket.send(JSON.stringify({
+    type: "input",
+    vx,
+    vy
+  }));
 }
 
-// Game loop with dt
-let last = performance.now();
-function loop(now) {
-  const dt = Math.min((now - last) / 1000, 0.05); // clamp dt
-  last = now;
-  update(dt);
-  render();
-  requestAnimationFrame(loop);
-}
-requestAnimationFrame(loop);
+/* =========================
+   WORLD CONFIG
+   ========================= */
 
-function update(dt) {
-  // compute intended direction
-  let dx = 0, dy = 0;
-  if (input.up) dy -= 1;
-  if (input.down) dy += 1;
-  if (input.left) dx -= 1;
-  if (input.right) dx += 1;
+const WORLD_WIDTH = 4000;
+const WORLD_HEIGHT = 4000;
 
-  if (dx !== 0 || dy !== 0) {
-    const len = Math.hypot(dx, dy);
-    dx /= len;
-    dy /= len;
-    player.vx = dx * player.speed;
-    player.vy = dy * player.speed;
-  } else {
-    player.vx = 0;
-    player.vy = 0;
-  }
+/* =========================
+   MAP DRAWING
+   ========================= */
 
-  player.x += player.vx * dt;
-  player.y += player.vy * dt;
+function drawMap() {
+  // Background
+  ctx.fillStyle = "#1b1b1b";
+  ctx.fillRect(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
 
-  // clamp to world bounds
-  player.x = Math.max(player.radius, Math.min(WORLD.width - player.radius, player.x));
-  player.y = Math.max(player.radius, Math.min(WORLD.height - player.radius, player.y));
-}
+  // Temple (top-left)
+  ctx.fillStyle = "#444";
+  ctx.fillRect(300, 300, 400, 400);
 
-function render() {
-  const w = canvas.width / (window.devicePixelRatio || 1);
-  const h = canvas.height / (window.devicePixelRatio || 1);
-
-  // background
-  ctx.fillStyle = '#07101a';
-  ctx.fillRect(0, 0, w, h);
-
-  // simple grid for world reference
-  const GRID = 128;
-  ctx.strokeStyle = '#0e2a33';
-  ctx.lineWidth = 1;
+  ctx.fillStyle = "#666";
   ctx.beginPath();
-  // vertical
-  for (let gx = 0; gx < WORLD.width; gx += GRID) {
-    const s = worldToScreen(gx, 0);
-    ctx.moveTo(s.x, 0);
-    ctx.lineTo(s.x, h);
-  }
-  // horizontal
-  for (let gy = 0; gy < WORLD.height; gy += GRID) {
-    const s = worldToScreen(0, gy);
-    ctx.moveTo(0, s.y);
-    ctx.lineTo(w, s.y);
-  }
-  ctx.stroke();
-
-  // draw other players (if any from server)
-  for (const id in otherPlayers) {
-    const op = otherPlayers[id];
-    const s = worldToScreen(op.x, op.y);
-    ctx.beginPath();
-    ctx.fillStyle = op.color || '#ee4';
-    ctx.arc(s.x, s.y, op.radius || 10, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = '#000';
-    ctx.font = '10px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText(op.name || 'Player', s.x, s.y - 16);
-  }
-
-  // draw player
-  const pScreen = worldToScreen(player.x, player.y);
-  ctx.beginPath();
-  ctx.fillStyle = player.color;
-  ctx.arc(pScreen.x, pScreen.y, player.radius, 0, Math.PI * 2);
+  ctx.moveTo(300, 300);
+  ctx.lineTo(700, 300);
+  ctx.lineTo(500, 100);
+  ctx.closePath();
   ctx.fill();
 
-  // draw player direction indicator
-  if (player.vx !== 0 || player.vy !== 0) {
-    ctx.strokeStyle = '#001f26';
-    ctx.lineWidth = 2;
+  // Square wall obstacles (grey boxes)
+  ctx.fillStyle = "#555";
+  const boxes = [
+    [900, 800], [600, 1200], [1200, 1500],
+    [800, 2000], [1400, 1800]
+  ];
+  boxes.forEach(([x, y]) => {
+    ctx.fillRect(x, y, 200, 200);
+  });
+
+  // Spiral walls (center)
+  ctx.strokeStyle = "#666";
+  ctx.lineWidth = 60;
+  ctx.beginPath();
+
+  let cx = 2000, cy = 2000;
+  let radius = 100;
+  let angle = 0;
+
+  ctx.moveTo(cx + radius, cy);
+
+  for (let i = 0; i < 200; i++) {
+    angle += 0.2;
+    radius += 4;
+    ctx.lineTo(
+      cx + Math.cos(angle) * radius,
+      cy + Math.sin(angle) * radius
+    );
+  }
+
+  ctx.stroke();
+
+  // Top-right walls
+  ctx.lineWidth = 80;
+  ctx.beginPath();
+  ctx.moveTo(3000, 300);
+  ctx.lineTo(3600, 300);
+  ctx.lineTo(3600, 700);
+  ctx.stroke();
+
+  // Bottom-right walls
+  ctx.beginPath();
+  ctx.moveTo(2800, 3000);
+  ctx.lineTo(3600, 3200);
+  ctx.stroke();
+}
+
+/* =========================
+   RENDER LOOP
+   ========================= */
+
+function render() {
+  requestAnimationFrame(render);
+
+  sendInput();
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  const me = players.find(p => p.id === myId);
+  if (!me) return;
+
+  // Camera
+  ctx.save();
+  ctx.translate(
+    canvas.width / 2 - me.x,
+    canvas.height / 2 - me.y
+  );
+
+  drawMap();
+
+  // Players
+  for (const p of players) {
+    ctx.fillStyle = p.id === myId ? "#4af" : "#f44";
     ctx.beginPath();
-    ctx.moveTo(pScreen.x, pScreen.y);
-    ctx.lineTo(pScreen.x + (player.vx / player.speed) * 30, pScreen.y + (player.vy / player.speed) * 30);
-    ctx.stroke();
+    ctx.arc(p.x, p.y, 20, 0, Math.PI * 2);
+    ctx.fill();
   }
 
-  // debug HUD
-  ctx.fillStyle = '#dfe';
-  ctx.font = '13px monospace';
-  ctx.fillText(`x:${Math.round(player.x)} y:${Math.round(player.y)} speed:${player.speed}`, 14, 18);
+  ctx.restore();
 }
 
-//
-// Optional WebSocket connection (non-blocking)
-// - Connects to WS_URL and prints debug messages.
-// - Future: send `input` to server and handle authoritative state updates.
-//
-let ws = null;
-const wsStatusEl = document.getElementById('ws-status');
-
-function connectWS() {
-  try {
-    ws = new WebSocket(WS_URL);
-  } catch (err) {
-    console.warn('Invalid WS_URL or failed to create WebSocket:', err);
-    updateWSStatus('error');
-    return;
-  }
-
-  ws.addEventListener('open', () => {
-    console.log('WS open', WS_URL);
-    updateWSStatus('open');
-    // example: send a ping
-    ws.send(JSON.stringify({ type: 'ping', clientTime: Date.now() }));
-  });
-
-  ws.addEventListener('message', (ev) => {
-    try {
-      const msg = JSON.parse(ev.data);
-      handleWSMessage(msg);
-    } catch (err) {
-      // ignore
-    }
-  });
-
-  ws.addEventListener('close', () => {
-    console.log('WS closed');
-    updateWSStatus('closed');
-    // reconnect later
-    setTimeout(connectWS, 3000);
-  });
-
-  ws.addEventListener('error', (e) => {
-    console.warn('WS error', e);
-    updateWSStatus('error');
-    ws.close();
-  });
-}
-
-function handleWSMessage(msg) {
-  console.log('ws msg', msg);
-  if (msg.type === 'welcome') {
-    // server replied; future: server could send world snapshot / players
-  } else if (msg.type === 'pong') {
-    // good
-  } else if (msg.type === 'state') {
-    // Example of how server-side state could be handled:
-    // msg.players => [{ id, x, y, name }]
-    // convert to otherPlayers (skip own client if server tells your id)
-    if (Array.isArray(msg.players)) {
-      for (const p of msg.players) {
-        // ignore if server includes our own id; here we have no ID tracking
-        otherPlayers[p.id] = {
-          x: p.x,
-          y: p.y,
-          name: p.name,
-          radius: 10,
-          color: '#ee4'
-        };
-      }
-    }
-  }
-}
-
-function updateWSStatus(s) {
-  if (wsStatusEl) wsStatusEl.textContent = s;
-}
-
-// Attempt to connect (non-blocking)
-if (WS_URL) connectWS();
+render();
